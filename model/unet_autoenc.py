@@ -1,5 +1,6 @@
 from enum import Enum
 import copy
+from typing import List
 import torch
 from torch import Tensor
 from torch.nn.functional import silu
@@ -69,6 +70,9 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
             style_channels = style_channels,
         )        
 
+        self.print_shapes = False
+        self.first_forward = False
+
         if conf.latent_net_conf is not None:
             self.latent_net = conf.latent_net_conf.make_model()
 
@@ -135,12 +139,24 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
             noise: random noise (to predict the cond)
             random/pose_random: classifier free
         """
+        # Print activation shape for debugging
+        if self.first_forward:
+            print_shapes = True
+        else:
+            print_shapes = False
+        shape_log: List[str] = []
+
+        if print_shapes and do_train:
+            shape_log.append(f"--- Activation Shape Analysis (Batch Size: {x.shape[0]}) ---")
+            shape_log.append(f"Input X Shape: {list(x.shape)}")
+            shape_log.append(f"Input T Shape: {list(t.shape)}")
 
         if t_cond is None:
             t_cond = t
 
         if noise is not None:
             cond = self.noise_to_cond(noise)
+            if print_shapes and do_train: shape_log.append(f"Noise to Cond Shape: {list(cond.shape)}")
      
         if cond is None:
             if self.sem_enc:
@@ -152,6 +168,10 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
             cond = cond * random[:,None].to(cond.device)
         cond_tmp = cond.clone()
         cond = cond.repeat_interleave(x.shape[0] // t.shape[0], dim=0)
+
+        if print_shapes and do_train: 
+            shape_log.append(f"Repeated COND Shape: {list(cond.shape)}")
+
         H,W = imgs.shape[2:]
         patch_num_x = H // patch_size
         patch_num_y = W // patch_size
@@ -164,6 +184,10 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
             pos_x = timestep_embedding(pos[:, 0], 64)
             pos_y = timestep_embedding(pos[:, 1], 64)
             pos_emb = torch.cat([pos_x, pos_y], dim=1)
+
+            if print_shapes and do_train:
+                shape_log.append(f"Timestep EMB Shape: {list(_t_emb.shape)}")
+                shape_log.append(f"Position EMB Shape: {list(pos_emb.shape)}")
         else:
             # this happens when training only autoenc
             _t_emb = None
@@ -187,6 +211,8 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
             # two cond: first = time emb, second = cond_emb
             emb = res.time_emb
             cond_emb = res.emb
+            if print_shapes and do_train: shape_log.append(f"Time_Embed Output (Time Emb): {list(res.time_emb.shape)}")
+            if print_shapes and do_train: shape_log.append(f"Time_Embed Output (Cond Emb): {list(res.emb.shape)}")
         else:
             # one cond = combined of both time and cond
             emb = res.emb
@@ -254,6 +280,8 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
 
                     hs[i].append(h)
                     hs_train[i].append(h.clone())
+                    if print_shapes and do_train: # <<< 在每個 Input Block 輸出後打印
+                        shape_log.append(f"InputBlock[{k}] Output Shape: {list(h.shape)}")
                     k += 1
                 # print(h.size())
             assert k == len(self.input_blocks)
@@ -261,6 +289,8 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
             # middle blocks
             h = self.middle_block(h, emb=mid_time_emb, cond=mid_cond_emb)
             h_train = h.clone()
+            if print_shapes and do_train: # <<< 在 Bottleneck 輸出後打印
+                shape_log.append(f"MiddleBlock Output Shape: {list(h.shape)}")
         else:
             # no lateral connections
             # happens when training only the autonecoder
@@ -319,8 +349,13 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
                                             emb=dec_time_emb,
                                             cond=dec_cond_emb, #dec_cond_emb,
                                             lateral=lateral)
+
+                    if print_shapes: # <<< 在每個 Output Block 輸出後打印
+                        shape_log.append(f"Output Block[{k}] Output Shape: {list(h.shape)}")
+
                     k += 1
             pred1 = self.out(h)
+            if print_shapes and do_train: shape_log.append(f"Decoder (First Runturn) Final Output Shape (Pred1): {list(pred1.shape)}")
 
             # Second Runturn
             k = 0
@@ -337,6 +372,7 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
                     k += 1
 
             pred2 = self.out(h_train)
+            if print_shapes and do_train: shape_log.append(f"Decoder (Second Runturn) Final Output Shape (Pred2): {list(pred2.shape)}")
 
         else:
             k = 0
@@ -381,6 +417,16 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
             pred1 = self.out(h)
             pred2 = pred1
 
+        if print_shapes and do_train:
+            try:
+                # 將所有收集到的形狀寫入檔案
+                with open("./activation_shapes_log.txt", "w", encoding="utf-8") as f:
+                    f.write('\n'.join(shape_log) + '\n')
+                print(f"✅ Activation Shape 報告已成功寫入：./activation_shapes_log.txt")
+                self.first_forward = False # Reset to avoid repeated logging
+            except Exception as e:
+                print(f"❌ 寫入 Activation Shape 文件時出錯: {e}")
+        
 
         return AutoencReturn(pred=pred1, pred2 = pred2, cond=cond)
 
