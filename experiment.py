@@ -49,29 +49,70 @@ class LitModel(pl.LightningModule):
         for param in self.model.parameters():
             model_size += param.data.nelement()
 
-        try:
-            with open("./model_param_count.txt", "w", encoding="utf-8") as f:
-                f.write(f"--- 💡 {type(self.model).__name__} 模塊參數列表與數量 ---\n")
-                total_params = 0
-                
-                # model.named_modules() 會遍歷所有層級的子模塊
-                for name, module in self.model.named_modules():
-                    # 我們只關心有參數的葉子層，例如 Conv2d, Linear, BatchNorm 等
-                    # 且不處理頂層模塊本身，因為它包含了所有子模塊的參數
-                    if len(list(module.children())) == 0 and len(list(module.parameters())) > 0:
-                        layer_params = 0
-                        # 遍歷該模塊內的所有參數 (權重、偏差等)
-                        for param in module.parameters():
-                            # numel() 得到張量的總元素數量
-                            layer_params += param.numel()
-                            
-                        # 打印該子模塊的名稱和參數數量
-                        f.write(f"{name}: {layer_params:,} 參數\n")
-                        total_params += layer_params
+        # --- 您可以定義一個變數來控制您想顯示前幾大的層次 ---
+        # TOP_N = 10
+        # OUTPUT_FILENAME = "./model_arch_txt/model_param_count.txt"
+        
+        # try:
+        #     # 1. 數據收集階段
+        #     layer_details: List[Tuple[str, int]] = []
+        #     total_params = 0
+            
+        #     # 遍歷所有層級的子模塊
+        #     for name, module in self.model.named_modules():
+        #         # 篩選條件：只關心有參數的葉子層
+        #         if len(list(module.children())) == 0 and len(list(module.parameters())) > 0:
+        #             layer_params = 0
+        #             for param in module.parameters():
+        #                 layer_params += param.numel()
+                    
+        #             # 存儲 (名稱, 數量)
+        #             layer_details.append((name, layer_params))
+        #             total_params += layer_params
 
-                f.write(f"--- 總計參數 (Total Trainable Parameters): {total_params:,} ---\n")
-        except Exception as e:
-            print(f"寫入模型參數文件時出錯: {e}")
+        #     # 2. 數據處理階段
+        #     # 排序：按參數數量降序排列
+        #     sorted_layers = sorted(
+        #         layer_details, 
+        #         key=lambda item: item[1], 
+        #         reverse=True
+        #     )
+            
+        #     top_n_layers = sorted_layers[:TOP_N]
+
+        #     # 3. 檔案寫入階段
+        #     with open(OUTPUT_FILENAME, "w", encoding="utf-8") as f:
+        #         f.write(f"--- 💡 {type(self.model).__name__} 模塊參數列表與數量 ---\n")
+        #         f.write(f"--- 總參數數量: {total_params:,} ---\n\n")
+
+        #         # 寫入前 N 大層次的分析報告
+        #         f.write("="*80 + "\n")
+        #         f.write(f"📊 參數佔比分析：前 {TOP_N} 大的層次 (佔總數的百分比)\n")
+        #         f.write("="*80 + "\n")
+                
+        #         for rank, (layer_name, params) in enumerate(top_n_layers, 1):
+        #             percentage = (params / total_params) * 100 if total_params > 0 else 0
+        #             f.write(f"#{rank:2d}. **{layer_name}** | 參數: {params:15,} | 佔總數: {percentage:.2f}%\n")
+                    
+        #         f.write("="*80 + "\n\n")
+                
+        #         # 寫入所有層次的詳細參數數量
+        #         f.write("--- 📜 所有層次參數詳情 (依層次定義順序) ---\n")
+        #         # 使用原始的 layer_details 保持模型定義的順序
+        #         for name, layer_params in layer_details:
+        #             f.write(f"✅ {name}: {layer_params:,} 參數\n")
+
+        #     print(f"✅ 模型參數分析報告已成功寫入：{OUTPUT_FILENAME}")
+
+        # except Exception as e:
+        #     print(f"❌ 寫入模型參數文件時出錯: {e}")
+
+
+        # try:
+        #     with open("./model_arch_txt/model_architecture.txt", "w", encoding="utf-8") as f:
+        #         f.write(str(self.model))
+        # except Exception as e:
+        #     print(f"寫入 model_architecture 文件時出錯: {e}")
 
         print('Model params: %.2f M' % (model_size / 1024 / 1024))
         self.patch_size = conf.patch_size
