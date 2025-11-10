@@ -1,2 +1,6 @@
 __pycache__/
-
+checkpoints/
+.gitignore
+datasets/
+*txt
+semantic_code/
