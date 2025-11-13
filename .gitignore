@@ -4,3 +4,4 @@ checkpoints/
 datasets/
 *txt
 semantic_code/
+*json
