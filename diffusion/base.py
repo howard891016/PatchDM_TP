@@ -178,6 +178,69 @@ class GaussianDiffusionBeatGans:
             model_output_shift = model_forward.pred
             model_output_no_shift = model_forward.pred2
 
+            import json # Howard add
+
+            hooked = False # Set to True to enable profiling
+            hook_data = {}
+            profile = {
+                "model_name": "PatchDM_beatgans_autoenc_profile_INT4",
+                "compute_layers": []
+            }
+
+            def get_profile_hook(name):
+                def hook(module, input_tensor, output_tensor):
+                    if isinstance(input_tensor, tuple) and len(input_tensor) > 0:
+                        input_act = input_tensor[0]
+                        # 獲取 (B, C, H, W) 中的 C*H*W
+                        # B 是 batch size，我們模擬時不關心
+                        elements_per_sample = input_act.numel() / input_act.shape[0]
+                        hook_data[name] = elements_per_sample
+                return hook
+            if hooked:
+                handles = []
+                for name, module in model.named_modules():
+                    if isinstance(module, (nn.Conv2d, nn.Linear)):
+                        handle = module.register_forward_hook(get_profile_hook(name))
+                        handles.append(handle)
+                
+                print("Running forward pass to collect profile data...")
+                with th.no_grad():
+                    _ = model.forward(x=x_t.detach(),
+                                        t=self._scale_timesteps(t),
+                                        pos=pos.detach(),
+                                        imgs=imgs.detach(),
+                                        idx = idx.detach(),
+                                        index = index,
+                                        do_train= True,
+                                        patch_size = patch_size,
+                                        random = s_random,
+                                        pos_random = pos_random,
+                                        **model_kwargs)
+                print("Profile data collected.")
+
+                for name, module in model.named_modules():
+                    if isinstance(module, (nn.Conv2d, nn.Linear)):
+                        if name not in hook_data:
+                            print(f"警告: {name} 沒有抓到 Hook 數據，可能未被執行。")
+                            continue
+                            
+                        layer_info = {
+                            "name": name,
+                            "type": module.__class__.__name__,
+                            "params": sum(p.numel() for p in module.parameters()),
+                            "input_activation_elements": hook_data[name]
+                        }
+                        profile["compute_layers"].append(layer_info)
+
+                for handle in handles:
+                    handle.remove()
+
+                with open('./unet_profile.json', 'w') as f:
+                    json.dump(profile, f, indent=2)
+
+                print("Profile data saved to unet_profile.json")
+
+
             assert model_output_shift.size(0) != noise.size(0)
             if loss_mask is None: # current is 4*4
                 noise_ori = rearrange(noise, '(b p1 p2) c h w -> b c (p1 h) (p2 w)', p1 = 2, p2 = 2)
