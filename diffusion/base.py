@@ -187,20 +187,69 @@ class GaussianDiffusionBeatGans:
                 "compute_layers": []
             }
 
-            def get_profile_hook(name):
+            def get_layer_macs(module, input_shape, output_shape):
+                """
+                自動計算 Linear / Conv2d 的 MAC 數量
+                """
+                if isinstance(module, nn.Linear):
+                    B, in_features = input_shape
+                    out_features = output_shape[1]
+                    return B * in_features * out_features
+
+                elif isinstance(module, nn.Conv2d):
+                    B, Cin, H, W = input_shape
+                    Cout, _, Kh, Kw = module.weight.shape
+                    Ho, Wo = output_shape[2], output_shape[3]
+                    # 每個 output pixel 的 MAC 是 Cin * Kh * Kw
+                    return B * Cout * Ho * Wo * (Cin * Kh * Kw)
+
+                else:
+                    return 0
+
+            def get_profile_hook(name, module):
                 def hook(module, input_tensor, output_tensor):
-                    if isinstance(input_tensor, tuple) and len(input_tensor) > 0:
-                        input_act = input_tensor[0]
-                        # 獲取 (B, C, H, W) 中的 C*H*W
-                        # B 是 batch size，我們模擬時不關心
-                        elements_per_sample = input_act.numel() / input_act.shape[0]
-                        hook_data[name] = elements_per_sample
+                    input_act = input_tensor[0]
+
+                    # shapes
+                    input_shape = list(input_act.shape)
+                    output_shape = list(output_tensor.shape)
+
+                    # elements
+                    input_elements = input_act.numel()
+                    output_elements = output_tensor.numel()
+
+                    # dtype
+                    dtype = str(input_act.dtype)
+
+                    # params shape
+                    weight_shape = list(module.weight.shape) if hasattr(module, "weight") else None
+                    bias_shape = list(module.bias.shape) if hasattr(module, "bias") and module.bias is not None else None
+
+                    # layer MACs
+                    macs = get_layer_macs(module, input_shape, output_shape)
+
+                    # record
+                    profile["compute_layers"].append({
+                        "name": name,
+                        "type": module.__class__.__name__,
+                        "input_shape": input_shape,
+                        "output_shape": output_shape,
+                        "input_activation_elements": input_elements,
+                        "output_activation_elements": output_elements,
+                        "params": sum(p.numel() for p in module.parameters()),
+                        "weight_shape": weight_shape,
+                        "bias_shape": bias_shape,
+                        "dtype": dtype,
+                        "layer_MACs": macs,
+                        "layer_FLOPs": macs * 2,
+                    })
+
                 return hook
             if hooked:
                 handles = []
                 for name, module in model.named_modules():
                     if isinstance(module, (nn.Conv2d, nn.Linear)):
-                        handle = module.register_forward_hook(get_profile_hook(name))
+                        handle = module.register_forward_hook(get_profile_hook(name, module))
                         handles.append(handle)
                 
                 print("Running forward pass to collect profile data...")
@@ -217,20 +266,6 @@ class GaussianDiffusionBeatGans:
                                         pos_random = pos_random,
                                         **model_kwargs)
                 print("Profile data collected.")
-
-                for name, module in model.named_modules():
-                    if isinstance(module, (nn.Conv2d, nn.Linear)):
-                        if name not in hook_data:
-                            print(f"警告: {name} 沒有抓到 Hook 數據，可能未被執行。")
-                            continue
-                            
-                        layer_info = {
-                            "name": name,
-                            "type": module.__class__.__name__,
-                            "params": sum(p.numel() for p in module.parameters()),
-                            "input_activation_elements": hook_data[name]
-                        }
-                        profile["compute_layers"].append(layer_info)
 
                 for handle in handles:
                     handle.remove()
