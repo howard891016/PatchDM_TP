@@ -195,6 +195,12 @@ class GaussianDiffusionBeatGans:
                     B, in_features = input_shape
                     out_features = output_shape[1]
                     return B * in_features * out_features
+                
+                elif isinstance(module, nn.Conv1d):
+                    B, Cin, Lin = input_shape
+                    Cout, _, K = module.weight.shape
+                    Lout = output_shape[2]
+                    return B * Cout * Lout * (Cin * K)
 
                 elif isinstance(module, nn.Conv2d):
                     B, Cin, H, W = input_shape
@@ -228,7 +234,16 @@ class GaussianDiffusionBeatGans:
                     # layer MACs
                     macs = get_layer_macs(module, input_shape, output_shape)
 
-                    # record
+                    is_qkv = ("qkv" in name.lower())
+                    is_proj = ("proj_out" in name.lower())
+
+                    if is_qkv:
+                        collective = "all_gather"
+                    elif is_proj:
+                        collective = "all_reduce"
+                    else:
+                        collective = "all_gather"  # default for standard conv/linear
+
                     profile["compute_layers"].append({
                         "name": name,
                         "type": module.__class__.__name__,
@@ -238,8 +253,10 @@ class GaussianDiffusionBeatGans:
                         "output_activation_elements": output_elements,
                         "params": sum(p.numel() for p in module.parameters()),
                         "weight_shape": weight_shape,
-                        "bias_shape": bias_shape,
-                        "dtype": dtype,
+                        "dtype": str(input_act.dtype),
+                        "is_qkv": is_qkv,
+                        "is_proj_out": is_proj,
+                        "collective": collective,
                         "layer_MACs": macs,
                         "layer_FLOPs": macs * 2,
                     })
@@ -248,7 +265,7 @@ class GaussianDiffusionBeatGans:
             if hooked:
                 handles = []
                 for name, module in model.named_modules():
-                    if isinstance(module, (nn.Conv2d, nn.Linear)):
+                    if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Linear)):
                         handle = module.register_forward_hook(get_profile_hook(name, module))
                         handles.append(handle)
                 
